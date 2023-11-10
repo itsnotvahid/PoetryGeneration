@@ -10,6 +10,9 @@ results are inside notebook
 after 8 epoch network could understand words but not actual poets the model is still underfit
 
 
+
+
 generating poetry with transformer language model :
+
 not implemented yet
 
