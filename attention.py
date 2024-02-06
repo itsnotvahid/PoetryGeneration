@@ -2,45 +2,48 @@ import torch
 from torch import nn
 
 
-class MaskedSelfAttention(nn.Module):
-
-    def __init__(self, input_size, attention_dim):
-        super().__init__()
-        self.key = nn.Linear(input_size, attention_dim)
-        self.query = nn.Linear(input_size, attention_dim)
-        self.value = nn.Linear(input_size, attention_dim)
-
-        self.register_buffer('mask', torch.tril(torch.ones(1000, 1000)))
-
-    def forward(self, x):
-        batch, sequence, embedding_dim = x.size()
-        key = self.key(x)
-        query = self.query(x)
-        value = self.value(x)
-
-        den = sequence ** 0.5
-        num = (query @ key.transpose(-2, -1)) / den
-
-        masked_num = num.masked_fill(self.mask[:sequence, :sequence] == 0, float('-inf'))  # creating Mask
-        scaled = torch.nn.functional.softmax(masked_num, dim=-1)
-        z = scaled @ value
-
-        return z
-
-
 class MultiHeadAttention(nn.Module):
 
-    def __init__(self, n_head, input_size, dropout):
+    def __init__(self, num_heads, d_model):
         super().__init__()
+        self.num_heads = num_heads
+        self.head_dims = d_model // num_heads
 
-        assert input_size % n_head == 0, 'd_model should be divideable by n_head'
-        attention_dim = input_size // n_head
-        self.heads = nn.ModuleList([MaskedSelfAttention(input_size, attention_dim) for _ in range(n_head)])
-        self.projection = nn.Linear(input_size, input_size)
-        self.dropout = nn.Dropout(dropout)
-        self.relu = nn.GELU()
+        self.query = nn.Linear(d_model, d_model)
+        self.key = nn.Linear(d_model, d_model)
+        self.value = nn.Linear(d_model, d_model)
+        self.output = nn.Linear(d_model, d_model)
+        self.register_buffer('mask', torch.tril(torch.ones(1000, 1000)))
 
-    def forward(self, x):
-        y = torch.cat([head(x) for head in self.heads], dim=-1)
-        y = self.dropout(self.relu(self.projection(y)))
-        return y
+    def __rearrange(self, vals):
+        batch, sequence, _ = vals.shape
+        vals = vals.reshape(batch, sequence, self.num_heads, self.head_dims).permute(0, 2, 1, 3)
+
+        return vals
+
+    def forward(self, query, key, value):
+        key = self.key(key)
+        query = self.query(query)
+        value = self.value(value)
+        seq = key.shape[1]
+
+        # batch, head, sequence, f
+        key = self.__rearrange(key)
+        query = self.__rearrange(query)
+        value = self.__rearrange(value)
+        den = key.shape[-1] ** 0.5
+        wgt = query @ key.transpose(-1, -2) / den
+
+        mask = torch.tril(torch.ones((seq, seq), device=next(self.parameters()).device)).type(torch.bool)
+        mask = mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dimensions at the beginning
+        mask = mask.expand(-1, self.num_heads, -1, -1)  # -1 means not changing that dimension, expand num_heads
+
+        # Now apply the mask
+        wgt = wgt.masked_fill(mask == 0, float('-inf'))
+
+        wgt = torch.softmax(wgt, dim=-1)
+        z = wgt @ value
+        z = z.permute(0, 2, 1, 3)
+        z = z.flatten(2)
+        output = self.output(z)
+        return output
