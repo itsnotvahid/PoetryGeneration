@@ -13,7 +13,6 @@ class MultiHeadAttention(nn.Module):
         self.key = nn.Linear(d_model, d_model)
         self.value = nn.Linear(d_model, d_model)
         self.output = nn.Linear(d_model, d_model)
-        self.register_buffer('mask', torch.tril(torch.ones(1000, 1000)))
 
     def __rearrange(self, vals):
         batch, sequence, _ = vals.shape
@@ -31,14 +30,13 @@ class MultiHeadAttention(nn.Module):
         key = self.__rearrange(key)
         query = self.__rearrange(query)
         value = self.__rearrange(value)
+
         den = key.shape[-1] ** 0.5
         wgt = query @ key.transpose(-1, -2) / den
 
         mask = torch.tril(torch.ones((seq, seq), device=next(self.parameters()).device)).type(torch.bool)
         mask = mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dimensions at the beginning
         mask = mask.expand(-1, self.num_heads, -1, -1)  # -1 means not changing that dimension, expand num_heads
-
-        # Now apply the mask
         wgt = wgt.masked_fill(mask == 0, float('-inf'))
 
         wgt = torch.softmax(wgt, dim=-1)
